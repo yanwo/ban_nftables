@@ -4,7 +4,7 @@ export PATH
 #=================================================
 #       System Required: CentOS/Debian/Ubuntu
 #       Description: nftables 封禁 BT、PT、SPAM（垃圾邮件）和自定义端口、关键词
-#       Version: 1.0-nftables
+#       Version: 1.0.1-nftables
 #=================================================
 
 sh_ver="1.0.10-nft"
@@ -52,7 +52,6 @@ check_sys(){
 	bit=`uname -m`
 }
 
-# 初始化 nftables 表和链
 init_nft(){
 	nft list table inet filter >/dev/null 2>&1
 	if [ $? -ne 0 ]; then
@@ -66,22 +65,11 @@ init_nft(){
 init_nft
 
 Save_nft(){
-	# 保存当前规则到 /etc/nftables.conf
 	nft list ruleset > /etc/nftables.conf
-	if [[ ${release} == "centos" ]]; then
-		# CentOS可使用 systemctl enable nftables 确保开机加载
-		:
-	else
-		# Debian/Ubuntu也可通过 systemctl enable nftables 或在if-pre-up中添加加载命令
-		:
-	fi
 }
 
-# 通过 comment 查找并删除指定规则 (关键词或端口)
-# 此为辅助函数，用于删除和原逻辑中类似的D操作匹配。
 nft_delete_rules_by_comment(){
 	comment=$1
-	# 获取所有匹配的规则handle
 	handles=$(nft -a list chain inet filter output | grep "$comment" | sed -n 's/.*handle \([0-9]\+\).*/\1/p')
 	for h in $handles; do
 		nft delete rule inet filter output handle $h 2>/dev/null
@@ -89,12 +77,10 @@ nft_delete_rules_by_comment(){
 }
 
 Cat_PORT(){
-	# 列出被封禁的端口规则，通过 comment "port_block:" 区分
 	Ban_PORT_list=$(nft list chain inet filter output | grep "port_block:" | sed -r 's/.*port_block:([0-9,:]+).*/\1/')
 }
 
 Cat_KEY_WORDS(){
-	# 列出被封禁的关键词规则，通过 comment "kw_block:" 区分
 	Ban_KEY_WORDS_list=$(nft list chain inet filter output | grep "kw_block:" | sed -r 's/.*kw_block:([^"]+).*/\1/')
 }
 
@@ -129,26 +115,25 @@ check_SPAM(){
 
 Set_key_word(){
 	# $1: A或D, $2:关键词
+	# 使用meta l4proto限制为tcp/udp，并通过@th指定从传输层头部开始搜索
 	if [ "$1" = "A" ]; then
-		nft add rule inet filter output string \"$2\" from 0 to 65535 drop comment \"kw_block:$2\"
+		nft add rule inet filter output meta l4proto tcp @th string \"$2\" from 0 to 65535 drop comment \"kw_block:$2\"
+		nft add rule inet filter output meta l4proto udp @th string \"$2\" from 0 to 65535 drop comment \"kw_block:$2\"
 	else
-		# 删除对应关键词规则
 		nft_delete_rules_by_comment "kw_block:$2"
 	fi
 }
 
 Set_tcp_port(){
-	# $1: A/D, $2:端口集
+	# 使用 icmpx port-unreachable 代替 icmp-port-unreachable
 	if [ "$1" = "A" ]; then
-		# tcp reject
-		nft add rule inet filter output tcp dport \{$2\} reject with icmp-port-unreachable comment \"port_block:$2\"
+		nft add rule inet filter output tcp dport \{$2\} comment \"port_block:$2\" reject with icmpx port-unreachable
 	else
 		nft_delete_rules_by_comment "port_block:$2"
 	fi
 }
 
 Set_udp_port(){
-	# $1: A/D, $2:端口集
 	if [ "$1" = "A" ]; then
 		nft add rule inet filter output udp dport \{$2\} drop comment \"port_block:$2\"
 	else
@@ -157,7 +142,7 @@ Set_udp_port(){
 }
 
 Set_SPAM_Code_v4(){
-	# 这里原先区分v4/v6，现在统一用inet，逻辑保持不变
+	# 与原逻辑保持，统一用 inet
 	for i in ${smtp_port} ${pop3_port} ${imap_port} ${other_port}
 		do
 		Set_tcp_port $s "$i"
@@ -166,7 +151,7 @@ Set_SPAM_Code_v4(){
 }
 
 Set_SPAM_Code_v4_v6(){
-	# 同上，统一使用inet表，不再区分v4和v6
+	# 同上，统一用 inet
 	for i in ${smtp_port} ${pop3_port} ${imap_port} ${other_port}
 	do
 		Set_tcp_port $s "$i"
@@ -175,8 +160,6 @@ Set_SPAM_Code_v4_v6(){
 }
 
 Set_PORT(){
-	# 原逻辑根据是否存在v4/v6iptables来添加规则
-	# 现在统一使用nft，不区分v4/v6
 	Set_tcp_port $s "$PORT"
 	Set_udp_port $s "$PORT"
 	Save_nft
@@ -199,7 +182,6 @@ Set_BT(){
 }
 
 Set_SPAM(){
-	# 不再区分v4/v6，统一使用 Set_SPAM_Code_v4_v6
 	if [[ -n $s ]]; then
 		Set_SPAM_Code_v4_v6
 	fi
@@ -446,7 +428,6 @@ UnBan_KEY_WORDS(){
 UnBan_KEY_WORDS_ALL(){
 	Cat_KEY_WORDS
 	[[ -z ${Ban_KEY_WORDS_list} ]] && echo -e "${Error} 检测到未封禁任何 关键词，请检查 !" && exit 0
-	# 批量删除所有关键词规则
 	for kw in ${Ban_KEY_WORDS_list}; do
 		nft_delete_rules_by_comment "kw_block:$kw"
 	done
@@ -456,7 +437,6 @@ UnBan_KEY_WORDS_ALL(){
 }
 
 check_iptables(){
-	# 原逻辑检测iptables，这里简单检测nft
 	nft --version >/dev/null 2>&1
 	if [[ $? -ne 0 ]]; then
 		echo -e "${Error} 未安装 nftables，请安装后再试!"
