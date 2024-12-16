@@ -4,8 +4,7 @@ export PATH
 #=================================================
 #       System Required: CentOS/Debian/Ubuntu
 #       Description: nftables 封禁 BT、PT、SPAM（垃圾邮件）和自定义端口、关键词
-#       Version: 1.0.10-nft
-#       Blog: https://doub.io/shell-jc2/
+#       Version: 1.0-nftables
 #=================================================
 
 sh_ver="1.0.10-nft"
